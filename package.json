@@ -1,0 +1,12 @@
+{
+  "name": "protect-camera-card",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Home Assistant card for UniFi Protect: snapshot overview, live view and events per camera.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "node --check dist/protect-camera-card.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}

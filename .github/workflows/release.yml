@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run check && npm test
+      - name: Check that the tag matches CARD_VERSION
+        run: |
+          v=$(grep -oP 'CARD_VERSION = "\K[^"]+' dist/protect-camera-card.js)
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} != CARD_VERSION $v"; exit 1; }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/protect-camera-card.js
+          generate_release_notes: true
