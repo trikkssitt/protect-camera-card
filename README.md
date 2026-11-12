@@ -2,6 +2,10 @@
 
 A Home Assistant Lovelace card for UniFi Protect cameras.
 
+![Overview with snapshots, event counts per camera and the latest events](docs/overview.jpg)
+
+*Overview with Norwegian UI. Snapshots, camera names and the event strip are redacted for privacy.*
+
 - **Overview:** snapshots that refresh in the background, event count for the last 24 hours per camera, and a strip with the latest events across all cameras.
 - **Camera view:** high-resolution live view over WebRTC, falling back to Home Assistant's own player. Control buttons for related entities (lights, locks, sirens, scripts) and the camera's events for the last 24 hours.
 - **Clips:** tap an event to play the recording in place.
