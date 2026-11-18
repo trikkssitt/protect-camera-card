@@ -14,7 +14,7 @@
  * UniFi Protect integration. These are not a public API and may change between HA releases.
  */
 
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.4.1";
 
 const DEFAULTS = {
   title: null, // null: translated default
@@ -253,6 +253,16 @@ function parseEvent(item, L = I18N.en) {
   };
 }
 
+/**
+ * Protect camera ID from a resolved event clip URL
+ * (/api/unifiprotect/video/{nvr}/{camera}/{start}/{end}). Events under "All cameras"
+ * carry no camera in their ID or title, so this is how the strip finds the camera.
+ */
+function cameraFromVideoUrl(url) {
+  const m = String(url ?? "").match(/\/api\/unifiprotect\/video\/[^/?]+\/([^/?]+)\/[^/?]+\/[^/?]+/);
+  return m ? m[1] : null;
+}
+
 /** Time of an event: "14:05" today, "yesterday 14:05", otherwise a short date. */
 function fmtTime(ev, L = I18N.en, locale = "en", now = new Date()) {
   if (!ev.ts) return ev.clock;
@@ -328,6 +338,7 @@ const STYLE = `
   .strip h3, .side h3 { margin: 0 0 10px; font-size: 1rem; font-weight: 600; }
   .strip-row { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; padding-bottom: 6px; }
   .sitem { all: unset; cursor: pointer; flex: none; width: 168px; scroll-snap-align: start; }
+  .sitem.static { cursor: default; }
   .sitem:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; border-radius: 8px; }
   .thumb { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px;
     background: rgba(127,127,127,.18); }
@@ -387,12 +398,15 @@ const STYLE = `
 
 class ProtectCameraCard extends HTMLElement {
   // Exposed for tests.
-  static _internals = { parseEvent, fmtTime, pickLang, startView, KIND_ICONS, I18N };
+  static _internals = { parseEvent, fmtTime, pickLang, startView, cameraFromVideoUrl, KIND_ICONS, I18N };
 
   constructor() {
     super();
     this._view = { name: "overview" };
     this._events = new Map(); // key -> { items, truncated, error }
+    this._recent = null; // "All cameras" events for the strip: { items, error }
+    this._eventCam = new Map(); // event id -> Protect camera id (null when unknown)
+    this._resolving = new Set(); // event ids being looked up
     this._signed = new Map(); // path -> { url, at }
     this._protect = null; // { nvr, ids: Map(key -> cameraId), titles: [] }
     this._protectError = null;
@@ -1109,7 +1123,13 @@ class ProtectCameraCard extends HTMLElement {
         protectCams.map((p) => p.title)
       );
     }
-    return { nvr, ids, titles: protectCams.map((p) => p.title) };
+    return {
+      nvr,
+      ids,
+      keyById: new Map([...ids].map(([key, id]) => [id, key])),
+      titleById: new Map(protectCams.map((p) => [p.id, p.title])),
+      titles: protectCams.map((p) => p.title),
+    };
   }
 
   async _loadEvents() {
@@ -1130,21 +1150,34 @@ class ProtectCameraCard extends HTMLElement {
         this._view.name === "camera" ? [this._view.key] : this._cams.map((c) => c.key);
       const type = this._config.event_type;
       const L = this._L;
+      const nvr = this._protect.nvr;
+      const hidden = (ev) => (this._config.exclude || []).includes(ev.kind);
       let returned = 0;
       let recognized = 0;
+      // The strip reads "All cameras", in the same order as the Media panel, so it also
+      // covers cameras that are not in the card.
+      const recent =
+        this._view.name !== "overview"
+          ? null
+          : this._browse(`media-source://unifiprotect/${nvr}:browse:all:${type}:recent:1`).then(
+              (res) => ({ items: (res.children || []).map((it) => parseEvent(it, L)).filter((ev) => !hidden(ev)), error: null }),
+              (err) => ({ items: [], error: err.message || String(err) })
+            );
+      if (this._eventCam.size > 5000) this._eventCam.clear();
       await Promise.all(
         keys.map(async (key) => {
           const camId = this._protect.ids.get(key);
           if (!camId) return;
           try {
             const res = await this._browse(
-              `media-source://unifiprotect/${this._protect.nvr}:browse:${camId}:${type}:recent:1`
+              `media-source://unifiprotect/${nvr}:browse:${camId}:${type}:recent:1`
             );
             const parsed = (res.children || []).map((it) => parseEvent(it, L));
+            parsed.forEach((ev) => this._eventCam.set(ev.id, camId));
             returned += parsed.length;
             recognized += parsed.filter((ev) => ev.recognized).length;
             this._events.set(key, {
-              items: parsed.filter((ev) => !(this._config.exclude || []).includes(ev.kind)),
+              items: parsed.filter((ev) => !hidden(ev)),
               truncated: /TRUNCATED/.test(res.title || ""),
               error: null,
             });
@@ -1153,6 +1186,7 @@ class ProtectCameraCard extends HTMLElement {
           }
         })
       );
+      if (recent) this._recent = await recent;
       this._parseWarning = returned > 0 && recognized === 0;
       if (this._parseWarning && !this._parseWarned) {
         this._parseWarned = true;
@@ -1162,6 +1196,26 @@ class ProtectCameraCard extends HTMLElement {
     } finally {
       this._loading = false;
     }
+  }
+
+  /** Finds the camera of strip events that no per-camera list contained (cameras not in the card). */
+  async _attribute(evs) {
+    const todo = evs.filter((ev) => !this._eventCam.has(ev.id) && !this._resolving.has(ev.id));
+    if (!todo.length) return;
+    todo.forEach((ev) => this._resolving.add(ev.id));
+    await Promise.all(
+      todo.map(async (ev) => {
+        try {
+          const res = await this._hass.callWS({ type: "media_source/resolve_media", media_content_id: ev.mid });
+          this._eventCam.set(ev.id, cameraFromVideoUrl(res.url));
+        } catch (_) {
+          this._eventCam.set(ev.id, null);
+        } finally {
+          this._resolving.delete(ev.id);
+        }
+      })
+    );
+    if (this._view.name === "overview") this._renderOverviewEvents();
   }
 
   async _sign(path) {
@@ -1235,19 +1289,35 @@ class ProtectCameraCard extends HTMLElement {
       return;
     }
     const unmatched = this._protect ? this._cams.filter((c) => !this._protect.ids.has(c.key)) : [];
-    all.sort((a, b) => (b.ev.ts ?? 0) - (a.ev.ts ?? 0));
-    const items = all.slice(0, this._config.strip_limit);
+    let items;
+    if (this._recent && !this._recent.error) {
+      // "All cameras", newest first as delivered. Events from cameras in the card open
+      // that camera; events from other cameras show the Protect name and are not clickable.
+      items = this._recent.items.slice(0, this._config.strip_limit).map((ev) => {
+        const pid = this._eventCam.get(ev.id);
+        const key = pid ? this._protect?.keyById.get(pid) : null;
+        const cam = key ? this._cam(key) : null;
+        const name = cam ? this._camName(cam) : (pid && this._protect?.titleById.get(pid)) || "";
+        return { ev, cam: cam && this._events.get(cam.key)?.items.some((e) => e.id === ev.id) ? cam : null, name };
+      });
+      this._attribute(items.filter((x) => !this._eventCam.has(x.ev.id)).map((x) => x.ev));
+    } else {
+      // Fallback when "All cameras" failed: merge the per-camera lists.
+      all.sort((a, b) => (b.ev.ts ?? 0) - (a.ev.ts ?? 0));
+      items = all.slice(0, this._config.strip_limit).map(({ ev, cam }) => ({ ev, cam, name: this._camName(cam) }));
+    }
     let html = items
-      .map(
-        ({ ev, cam }) => `
-        <button class="sitem" data-act="openplay" data-key="${cam.key}" data-id="${esc(ev.id)}">
+      .map(({ ev, cam, name }) => {
+        const body = `
           <img class="thumb" alt="" ${ev.thumb ? `data-thumb="${esc(ev.thumb)}"` : ""}>
           <div class="l1">${kindIcon(ev.kind)}${esc(ev.label)}</div>
-          <div class="l2">${esc(this._camName(cam))} ${esc(L.at)} ${esc(this._time(ev))}</div>
-        </button>`
-      )
+          <div class="l2">${name ? `${esc(name)} ${esc(L.at)} ` : ""}${esc(this._time(ev))}</div>`;
+        return cam
+          ? `<button class="sitem" data-act="openplay" data-key="${cam.key}" data-id="${esc(ev.id)}">${body}</button>`
+          : `<div class="sitem static">${body}</div>`;
+      })
       .join("");
-    if (!items.length && this._events.size) html = `<div class="note">${esc(L.no_events)}</div>`;
+    if (!items.length && (this._events.size || this._recent)) html = `<div class="note">${esc(L.no_events)}</div>`;
     if (this._parseWarning) html += `<div class="note">${esc(L.parse_none)}</div>`;
     if (unmatched.length) {
       html += `<div class="note">${L.unmatched(

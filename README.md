@@ -6,7 +6,7 @@ A Home Assistant Lovelace card for UniFi Protect cameras.
 
 *Overview with Norwegian UI. Snapshots, camera names and the event strip are redacted for privacy.*
 
-- **Overview:** snapshots that refresh in the background, event count for the last 24 hours per camera, and a strip with the latest events across all cameras.
+- **Overview:** snapshots that refresh in the background, event count for the last 24 hours per camera, and a strip with the latest events from Protect's *All cameras* list, in the same order as the Media panel. Events from cameras that are not in the card show the Protect camera name but cannot be opened.
 - **Camera view:** high-resolution live view over WebRTC, falling back to Home Assistant's own player. Control buttons for related entities (lights, locks, sirens, scripts) and the camera's events for the last 24 hours.
 - **Clips:** tap an event to play the recording in place.
 
@@ -31,7 +31,7 @@ The overview uses snapshots only. Live streaming starts only for the camera you 
 ### Manual
 
 1. Copy `dist/protect-camera-card.js` to `/config/www/protect-camera-card.js`.
-2. Add a dashboard resource: URL `/local/protect-camera-card.js?v=0.4.0`, type **JavaScript module**. Change `?v=` on every update so browsers fetch the new file.
+2. Add a dashboard resource: URL `/local/protect-camera-card.js?v=0.4.1`, type **JavaScript module**. Change `?v=` on every update so browsers fetch the new file.
 
 ## Configuration
 
@@ -120,6 +120,7 @@ protect-event-person-color: var(--primary-color)
 
 - **Events depend on the integration's internal format.** The card reads event IDs and titles such as `Object Detection - person` from the UniFi Protect media source. This is not a public API. If an update changes the format, the card shows a notice instead of events. Please open an issue with your Home Assistant version.
 - Only the last 24 hours of events are shown.
+- The integration fetches at most `max_media` events (default 1000) per request, oldest first, for the whole console. On a busy system the newest events are cut off and the counts show `+`. If this happens, raise the `max_media` limit in the UniFi Protect integration options.
 - On iPhone and iPad, fullscreen works on the video only, not the whole stage.
 
 ## Development
@@ -128,7 +129,7 @@ protect-event-person-color: var(--primary-color)
 npm test    # parser and formatting tests, no dependencies
 ```
 
-Releases are created from tags (`v0.4.0`). The tag must match `CARD_VERSION` in the card.
+Releases are created from tags (`v0.4.1`). The tag must match `CARD_VERSION` in the card.
 
 ## License
 

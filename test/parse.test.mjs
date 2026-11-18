@@ -138,3 +138,17 @@ test("startView: unknown camera or view throws", () => {
 test("every event kind has an icon", () => {
   for (const k of Object.keys(I18N.en.kinds)) assert.match(KIND_ICONS[k], /^mdi:/);
 });
+
+const { cameraFromVideoUrl } = loadCard();
+
+test("cameraFromVideoUrl: camera id from a resolved event clip URL", () => {
+  assert.equal(
+    cameraFromVideoUrl("/api/unifiprotect/video/nvr1/cam42/2026-11-18T10:00:00+01:00/2026-11-18T10:00:12+01:00?authSig=x"),
+    "cam42"
+  );
+});
+
+test("cameraFromVideoUrl: event proxy URL and junk give null", () => {
+  assert.equal(cameraFromVideoUrl("/api/unifiprotect/video/nvr1/67300000aaaaaaaaaaaaaaaa"), null);
+  assert.equal(cameraFromVideoUrl(undefined), null);
+});

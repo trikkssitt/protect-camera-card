@@ -1,6 +1,6 @@
 {
   "name": "protect-camera-card",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Home Assistant card for UniFi Protect: snapshot overview, live view and events per camera.",
   "license": "MIT",
