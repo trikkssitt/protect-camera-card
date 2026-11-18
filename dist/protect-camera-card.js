@@ -14,7 +14,7 @@
  * UniFi Protect integration. These are not a public API and may change between HA releases.
  */
 
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.4.0";
 
 const DEFAULTS = {
   title: null, // null: translated default
@@ -32,6 +32,8 @@ const I18N = {
   en: {
     title: "Cameras",
     need_camera: "Add at least one camera under cameras:",
+    bad_start_view: (v) => `start_view must be overview or live, not "${v}".`,
+    bad_start_camera: (e) => `start_camera "${e}" is not in the cameras list.`,
     refresh: "Refresh",
     back: "Back to all cameras",
     mute: "Sound on/off",
@@ -78,6 +80,8 @@ const I18N = {
   nb: {
     title: "Kameraer",
     need_camera: "Legg inn minst ett kamera under cameras:",
+    bad_start_view: (v) => `start_view må være overview eller live, ikke «${v}».`,
+    bad_start_camera: (e) => `start_camera «${e}» finnes ikke i cameras-listen.`,
     refresh: "Oppdater",
     back: "Tilbake til alle kameraer",
     mute: "Lyd av/på",
@@ -168,6 +172,36 @@ function kindOf(text) {
 }
 
 const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+
+/** One icon per event kind, so kinds can be told apart without relying on color. */
+const KIND_ICONS = {
+  person: "mdi:account",
+  vehicle: "mdi:car",
+  animal: "mdi:paw",
+  package: "mdi:package-variant-closed",
+  ring: "mdi:doorbell",
+  motion: "mdi:motion-sensor",
+  audio: "mdi:waveform",
+  other: "mdi:record-circle-outline",
+};
+
+const kindIcon = (kind) =>
+  `<ha-icon class="kind k-${kind}" icon="${KIND_ICONS[kind] || KIND_ICONS.other}" aria-hidden="true"></ha-icon>`;
+
+/**
+ * The view the card opens in. `start_camera` matches a camera's `entity` or `live_entity`.
+ * `start_view` is `overview` or `live`; it defaults to `live` when `start_camera` is set.
+ */
+function startView(config, cams, L = I18N.en) {
+  const want = config.start_view ?? (config.start_camera ? "live" : "overview");
+  if (want === "overview") return { name: "overview" };
+  if (want !== "live") throw new Error(L.bad_start_view(want));
+  const cam = config.start_camera
+    ? cams.find((c) => c.entity === config.start_camera || c.live_entity === config.start_camera)
+    : cams[0];
+  if (!cam) throw new Error(L.bad_start_camera(config.start_camera));
+  return { name: "camera", key: cam.key, clip: null };
+}
 
 /**
  * Interprets one event item from the UniFi Protect media source.
@@ -276,10 +310,19 @@ const STYLE = `
   .summary ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.85rem; }
   .summary li { display: flex; align-items: center; gap: 6px; }
 
-  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--k, #9e9e9e); }
-  .k-person { --k: #5b8def; } .k-vehicle { --k: #e0a33a; } .k-animal { --k: #5fae6e; }
-  .k-package { --k: #b07fd6; } .k-ring { --k: #e35d6a; } .k-audio { --k: #3fb5b0; }
-  .k-motion, .k-other { --k: #9e9e9e; }
+  /* Event kinds: an icon per kind in a muted color. Themes can set --protect-event-color
+     for all kinds, or --protect-event-<kind>-color for one kind. */
+  .kind { --mdc-icon-size: 16px; display: inline-flex; flex: none;
+    color: var(--k, var(--protect-event-color, var(--secondary-text-color))); }
+  .tile .kind { color: var(--k, currentColor); }
+  .k-person { --k: var(--protect-event-person-color); }
+  .k-vehicle { --k: var(--protect-event-vehicle-color); }
+  .k-animal { --k: var(--protect-event-animal-color); }
+  .k-package { --k: var(--protect-event-package-color); }
+  .k-ring { --k: var(--protect-event-ring-color); }
+  .k-motion { --k: var(--protect-event-motion-color); }
+  .k-audio { --k: var(--protect-event-audio-color); }
+  .k-other { --k: var(--protect-event-other-color); }
 
   .strip { margin-top: 18px; }
   .strip h3, .side h3 { margin: 0 0 10px; font-size: 1rem; font-weight: 600; }
@@ -313,7 +356,8 @@ const STYLE = `
   .stage .msg { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; padding: 16px;
     text-align: center; }
   .mode { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--secondary-text-color); }
-  .mode.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #e35d6a; }
+  .mode.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--protect-live-color, currentColor); }
 
   .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   .controls:empty { display: none; }
@@ -343,7 +387,7 @@ const STYLE = `
 
 class ProtectCameraCard extends HTMLElement {
   // Exposed for tests.
-  static _internals = { parseEvent, fmtTime, pickLang, I18N };
+  static _internals = { parseEvent, fmtTime, pickLang, startView, KIND_ICONS, I18N };
 
   constructor() {
     super();
@@ -372,17 +416,24 @@ class ProtectCameraCard extends HTMLElement {
     if (!config || !Array.isArray(config.cameras) || !config.cameras.length) {
       throw new Error(I18N[pickLang(config, this._hass)].need_camera);
     }
-    this._config = { ...DEFAULTS, ...config };
-    this._cams = config.cameras.map((c, i) => ({
+    const L = I18N[pickLang(config, this._hass)];
+    const cams = config.cameras.map((c, i) => ({
       ...c,
       key: `c${i}`,
       live_entity: c.live_entity || c.entity,
       controls: c.controls || [],
     }));
+    const start = startView(config, cams, L); // throws on an invalid start_camera/start_view
+    this._config = { ...DEFAULTS, ...config };
+    this._cams = cams;
+    this._start = start;
     this._protect = null;
     if (this._root) {
-      this._render();
+      this._go({ ...start });
       this._startTimers();
+      this._loadEvents();
+    } else {
+      this._view = { ...start };
     }
   }
 
@@ -418,12 +469,20 @@ class ProtectCameraCard extends HTMLElement {
   }
 
   connectedCallback() {
+    // Reattached (a reopened popup, or returning to the dashboard view): the stage was torn
+    // down on disconnect, so start over from the configured start view.
+    if (this._detached && this._root && this._hass && this._start) {
+      this._go({ ...this._start });
+      this._loadEvents();
+    }
+    this._detached = false;
     this._startTimers();
     document.addEventListener("visibilitychange", this._onVis);
     window.addEventListener("keydown", this._onKey);
   }
 
   disconnectedCallback() {
+    this._detached = true;
     clearInterval(this._snapTimer);
     clearInterval(this._evTimer);
     document.removeEventListener("visibilitychange", this._onVis);
@@ -1148,7 +1207,7 @@ class ProtectCameraCard extends HTMLElement {
       const first = data.items[0];
       if (last) {
         last.innerHTML = first
-          ? `<span class="dot k-${first.kind}"></span>${esc(first.label)} ${esc(L.at)} ${esc(this._time(first))}`
+          ? `${kindIcon(first.kind)}${esc(first.label)} ${esc(L.at)} ${esc(this._time(first))}`
           : esc(L.no_events);
       }
       data.items.forEach((ev) => {
@@ -1164,7 +1223,7 @@ class ProtectCameraCard extends HTMLElement {
     if (summary) {
       const rows = Object.entries(kinds)
         .sort((a, b) => b[1] - a[1])
-        .map(([k, n]) => `<li><span class="dot k-${k}"></span>${esc(L.kinds[k])} ${n}</li>`)
+        .map(([k, n]) => `<li>${kindIcon(k)}${esc(L.kinds[k])} ${n}</li>`)
         .join("");
       summary.innerHTML = `<div class="big">${total}</div><div class="sub">${esc(L.events_sub)}</div><ul>${rows}</ul>`;
     }
@@ -1183,7 +1242,7 @@ class ProtectCameraCard extends HTMLElement {
         ({ ev, cam }) => `
         <button class="sitem" data-act="openplay" data-key="${cam.key}" data-id="${esc(ev.id)}">
           <img class="thumb" alt="" ${ev.thumb ? `data-thumb="${esc(ev.thumb)}"` : ""}>
-          <div class="l1"><span class="dot k-${ev.kind}"></span>${esc(ev.label)}</div>
+          <div class="l1">${kindIcon(ev.kind)}${esc(ev.label)}</div>
           <div class="l2">${esc(this._camName(cam))} ${esc(L.at)} ${esc(this._time(ev))}</div>
         </button>`
       )
@@ -1234,7 +1293,7 @@ class ProtectCameraCard extends HTMLElement {
             <img class="thumb" alt="" ${ev.thumb ? `data-thumb="${esc(ev.thumb)}"` : ""}>
             <span>
               <span class="t">${esc(this._time(ev))}</span>
-              <span class="l"><span class="dot k-${ev.kind}"></span>${esc(ev.label)}</span>
+              <span class="l">${kindIcon(ev.kind)}${esc(ev.label)}</span>
               ${ev.duration ? `<span class="d">${esc(ev.duration)}</span>` : ""}
             </span>
           </button></li>`

@@ -102,3 +102,39 @@ test("pickLang", () => {
   assert.equal(pickLang({ language: "en" }, { locale: { language: "nb" } }), "en");
   assert.equal(pickLang({}, undefined), "en");
 });
+
+const { startView, KIND_ICONS } = loadCard();
+const cams = [
+  { key: "c0", entity: "camera.driveway_medium", live_entity: "camera.driveway_medium" },
+  { key: "c1", entity: "camera.frontdoor_medium", live_entity: "camera.frontdoor_high" },
+];
+
+test("startView: overview by default", () => {
+  assert.deepEqual({ ...startView({}, cams) }, { name: "overview" });
+});
+
+test("startView: start_camera alone opens that camera live", () => {
+  assert.equal(startView({ start_camera: "camera.frontdoor_medium" }, cams).key, "c1");
+  assert.equal(startView({ start_camera: "camera.frontdoor_medium", start_view: "live" }, cams).name, "camera");
+});
+
+test("startView: start_camera also matches live_entity", () => {
+  assert.equal(startView({ start_camera: "camera.frontdoor_high" }, cams).key, "c1");
+});
+
+test("startView: live without start_camera uses the first camera", () => {
+  assert.equal(startView({ start_view: "live" }, cams).key, "c0");
+});
+
+test("startView: explicit overview wins over start_camera", () => {
+  assert.equal(startView({ start_view: "overview", start_camera: "camera.frontdoor_medium" }, cams).name, "overview");
+});
+
+test("startView: unknown camera or view throws", () => {
+  assert.throws(() => startView({ start_camera: "camera.nope" }, cams), /camera\.nope/);
+  assert.throws(() => startView({ start_view: "grid" }, cams), /grid/);
+});
+
+test("every event kind has an icon", () => {
+  for (const k of Object.keys(I18N.en.kinds)) assert.match(KIND_ICONS[k], /^mdi:/);
+});

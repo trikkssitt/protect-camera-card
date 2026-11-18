@@ -31,7 +31,7 @@ The overview uses snapshots only. Live streaming starts only for the camera you 
 ### Manual
 
 1. Copy `dist/protect-camera-card.js` to `/config/www/protect-camera-card.js`.
-2. Add a dashboard resource: URL `/local/protect-camera-card.js?v=0.3.0`, type **JavaScript module**. Change `?v=` on every update so browsers fetch the new file.
+2. Add a dashboard resource: URL `/local/protect-camera-card.js?v=0.4.0`, type **JavaScript module**. Change `?v=` on every update so browsers fetch the new file.
 
 ## Configuration
 
@@ -54,6 +54,8 @@ cameras:
 | --- | --- | --- |
 | `cameras` | required | List of cameras, see below. |
 | `title` | translated "Cameras" | Card title. |
+| `start_camera` | none | Open this camera's live view instead of the overview. Matches `entity` or `live_entity` of a camera in `cameras`. |
+| `start_view` | `live` with `start_camera`, else `overview` | `overview` or `live`. `live` without `start_camera` opens the first camera. |
 | `columns` | `4` | Columns in the overview grid. Narrow screens use 2. |
 | `refresh_seconds` | `10` | Snapshot refresh interval. |
 | `events_refresh_seconds` | `90` | Event refresh interval (minimum 20). |
@@ -81,6 +83,39 @@ cameras:
 
 The card matches each entity to a Protect camera by name. If it cannot, it says so under the event strip and lists the available Protect names.
 
+### Doorbell popup
+
+Set `start_camera` to open the card directly in one camera's live view, for example in a popup when the doorbell rings. Only that camera's events are loaded, and the back button still leads to the overview. The card returns to its start view each time it is shown again.
+
+```yaml
+type: custom:protect-camera-card
+start_camera: camera.front_door_medium
+start_view: live
+cameras:
+  - entity: camera.front_door_medium
+    live_entity: camera.front_door_high
+    controls:
+      - lock.front_door
+```
+
+### Theming
+
+Each event kind has its own icon, shown in the secondary text color, so kinds are told apart without relying on color. The colors are CSS variables that a theme can override:
+
+| Variable | Default | Used for |
+| --- | --- | --- |
+| `--protect-event-color` | `--secondary-text-color` | All event icons. |
+| `--protect-event-<kind>-color` | `--protect-event-color` | One kind: `person`, `vehicle`, `animal`, `package`, `ring`, `motion`, `audio`, `other`. |
+| `--protect-live-color` | text color | The dot next to "Live" in the camera view. |
+
+On snapshot tiles, icons follow the white caption text unless a kind color is set.
+
+```yaml
+# In a theme
+protect-event-ring-color: "#e35d6a"
+protect-event-person-color: var(--primary-color)
+```
+
 ## Known limitations
 
 - **Events depend on the integration's internal format.** The card reads event IDs and titles such as `Object Detection - person` from the UniFi Protect media source. This is not a public API. If an update changes the format, the card shows a notice instead of events. Please open an issue with your Home Assistant version.
@@ -93,7 +128,7 @@ The card matches each entity to a Protect camera by name. If it cannot, it says 
 npm test    # parser and formatting tests, no dependencies
 ```
 
-Releases are created from tags (`v0.3.0`). The tag must match `CARD_VERSION` in the card.
+Releases are created from tags (`v0.4.0`). The tag must match `CARD_VERSION` in the card.
 
 ## License
 
